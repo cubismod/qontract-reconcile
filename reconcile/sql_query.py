@@ -533,6 +533,26 @@ def run(dry_run, enable_deletion=False):
         if not dry_run:
             state[query_name] = time.time()
 
+    obsolete_jobs = [] 
+
+    for state_key in state.ls():
+        # find jobs/cronjobs whose state is not finished but have been
+        # deleted from App Interface
+        if state[state_key] != 'DONE' and state_key not in queries_list:
+            obsolete_jobs.append(state_key)
+
+    all_namespaces = queries.get_namespaces(True)
+    for job in obsolete_jobs:
+        oc_map = OC_Map(
+            namespaces=all_namespaces,
+            integration=QONTRACT_INTEGRATION,
+            settings=settings,
+            internal=None
+        )
+
+        for resource in ["Job", "Secret", "CronJob"]:
+            openshift_delete(dry_run, oc_map, )
+
     for candidate in remove_candidates:
         if time.time() < candidate["timestamp"] + JOB_TTL:
             continue
