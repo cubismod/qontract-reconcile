@@ -8,6 +8,7 @@ from typing import (
     Any,
     Optional,
 )
+from venv import logger
 
 import yaml
 from pydantic import BaseModel
@@ -19,6 +20,7 @@ from reconcile.gql_definitions.terraform_repo.terraform_repo import (
 )
 from reconcile.utils import gql
 from reconcile.utils.defer import defer
+from reconcile.utils.differ import diff_by_key
 from reconcile.utils.exceptions import ParameterError
 from reconcile.utils.gitlab_api import GitLabApi
 from reconcile.utils.runtime.integration import (
@@ -116,11 +118,11 @@ class TerraformRepoIntegration(
 
         return repo_list
 
-    def map_repos(
-        self, repos: list[TerraformRepoV1]
-    ) -> MutableMapping[str, TerraformRepoV1]:
-        """Generate keys for each repo to more easily compare"""
-        return {repo.name: repo for repo in repos}
+    # def map_repos(
+    #     self, repos: list[TerraformRepoV1]
+    # ) -> MutableMapping[str, TerraformRepoV1]:
+    #     """Generate keys for each repo to more easily compare"""
+    #     return {repo.name: repo for repo in repos}
 
     def check_ref(self, repo_url: str, ref: str, path: str) -> None:
         """
@@ -143,51 +145,51 @@ class TerraformRepoIntegration(
             except (KeyError, AttributeError):
                 raise ParameterError(f'Invalid ref: "{ref}" on repo: "{repo_url}"')
 
-    def diff_missing(
-        self,
-        a: Mapping[str, TerraformRepoV1],
-        b: Mapping[str, TerraformRepoV1],
-        require_delete: bool = False,
-    ) -> MutableMapping[str, TerraformRepoV1]:
-        """
-        Returns a mapping of repos that are present in mapping a but missing in mapping b
-        When requireDelete = True, each repo from a is checked to ensure that the delete flag is set"""
-        missing: MutableMapping[str, TerraformRepoV1] = dict()
-        for a_key, a_repo in a.items():
-            if a_key not in b:
-                if require_delete and not a_repo.delete:
-                    raise ParameterError(
-                        f'To delete the terraform repo "{a_repo.name}", you must set delete: true in the repo definition'
-                    )
-                missing[a_key] = a_repo
+    # def diff_missing(
+    #     self,
+    #     a: Mapping[str, TerraformRepoV1],
+    #     b: Mapping[str, TerraformRepoV1],
+    #     require_delete: bool = False,
+    # ) -> MutableMapping[str, TerraformRepoV1]:
+    #     """
+    #     Returns a mapping of repos that are present in mapping a but missing in mapping b
+    #     When requireDelete = True, each repo from a is checked to ensure that the delete flag is set"""
+    #     missing: MutableMapping[str, TerraformRepoV1] = dict()
+    #     for a_key, a_repo in a.items():
+    #         if a_key not in b:
+    #             if require_delete and not a_repo.delete:
+    #                 raise ParameterError(
+    #                     f'To delete the terraform repo "{a_repo.name}", you must set delete: true in the repo definition'
+    #                 )
+    #             missing[a_key] = a_repo
 
-        return missing
+    #     return missing
 
-    def diff_changed(
-        self, a: Mapping[str, TerraformRepoV1], b: Mapping[str, TerraformRepoV1]
-    ) -> MutableMapping[str, TerraformRepoV1]:
-        """
-        Returns a mapping of repos that have changed between a and b in the form of returning their b values
-        In order for Terraform to work as expected, the tenant can only update the ref between MRs
-        Updating account, repo, or project_path can lead to unexpected behavior so we error
-        on that
-        """
-        changed: MutableMapping[str, TerraformRepoV1] = dict()
-        for a_key, a_repo in a.items():
-            b_repo = b.get(a_key, a_repo)
-            if (
-                a_repo.account != b_repo.account
-                or a_repo.name != b_repo.name
-                or a_repo.project_path != b_repo.project_path
-                or a_repo.repository != b_repo.repository
-            ):
-                raise ParameterError(
-                    f'Only the `ref` and `delete` parameters for a terraform repo may be updated in merge requests on repo: "{a_repo.name}"'
-                )
-            if (a_repo.ref != b_repo.ref) or (a_repo.delete != b_repo.delete):
-                changed[a_key] = b_repo
+    # def diff_changed(
+    #     self, a: Mapping[str, TerraformRepoV1], b: Mapping[str, TerraformRepoV1]
+    # ) -> MutableMapping[str, TerraformRepoV1]:
+    #     """
+    #     Returns a mapping of repos that have changed between a and b in the form of returning their b values
+    #     In order for Terraform to work as expected, the tenant can only update the ref between MRs
+    #     Updating account, repo, or project_path can lead to unexpected behavior so we error
+    #     on that
+    #     """
+    #     changed: MutableMapping[str, TerraformRepoV1] = dict()
+    #     for a_key, a_repo in a.items():
+    #         b_repo = b.get(a_key, a_repo)
+    #         if (
+    #             a_repo.account != b_repo.account
+    #             or a_repo.name != b_repo.name
+    #             or a_repo.project_path != b_repo.project_path
+    #             or a_repo.repository != b_repo.repository
+    #         ):
+    #             raise ParameterError(
+    #                 f'Only the `ref` and `delete` parameters for a terraform repo may be updated in merge requests on repo: "{a_repo.name}"'
+    #             )
+    #         if (a_repo.ref != b_repo.ref) or (a_repo.delete != b_repo.delete):
+    #             changed[a_key] = b_repo
 
-        return changed
+    #     return changed
 
     def merge_results(
         self,
@@ -244,20 +246,30 @@ class TerraformRepoIntegration(
         state: Optional[State],
     ) -> list[TerraformRepoV1]:
         """Diffs existing and desired state as well as updates the state in S3 if this is not a dry-run operation"""
-        existing_map = self.map_repos(existing_state)
-        desired_map = self.map_repos(desired_state)
+        
+        # pydantic models do have __eq__ implemented so no need to specify an equal function
+        result = diff_by_key(
+            existing_state,
+            desired_state,
+            lambda c: c.name,
+            lambda d: d.name
+        )
+        
+        # existing_map = self.map_repos(existing_state)
+        # desired_map = self.map_repos(desired_state)
 
-        to_be_created = self.diff_missing(desired_map, existing_map)
-        to_be_updated = self.diff_changed(existing_map, desired_map)
+        # to_be_created = self.diff_missing(desired_map, existing_map)
+        # to_be_updated = self.diff_changed(existing_map, desired_map)
 
         # indicates repos which have had their definitions deleted from App Interface
         # a pre-requisite to this step is setting the delete flag in the repo definition
-        to_be_deleted = self.diff_missing(existing_map, desired_map, True)
+        # to_be_deleted = self.diff_missing(existing_map, desired_map, True)
+        logger.info(result)
 
-        if not dry_run and state:
-            self.update_state(to_be_created, to_be_deleted, to_be_updated, state)
+        # if not dry_run and state:
+        #     self.update_state(result.add, to_be_deleted, to_be_updated, state)
 
-        return self.merge_results(to_be_created, to_be_updated)
+        # return self.merge_results(to_be_created, to_be_updated)
 
     def early_exit_desired_state(*args: Any, **kwargs: Any) -> dict[str, Any]:
         gqlapi = gql.get_api()
