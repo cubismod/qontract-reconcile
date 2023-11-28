@@ -66,7 +66,7 @@ class OutputFile(BaseModel):
 class TerraformRepoIntegrationParams(PydanticRunParams):
     output_file: Optional[str]
     validate_git: bool
-    ignore_state_errors: bool
+    refresh_state: bool
     gitlab_project_id: Optional[str]
     gitlab_merge_request_id: Optional[int]
 
@@ -102,6 +102,12 @@ class TerraformRepoIntegration(
         repo_diff_result = self.calculate_diff(
             existing_state=existing, desired_state=desired, dry_run=dry_run, state=state
         )
+
+        if self.params.refresh_state:
+            logging.info(
+                "--refresh-state param is enabled, therefore tf-repo will only update its own state of repos and not actually perform any applies or plans. Please disable this flag in the integration spec file in a follow-up MR to restore full tf-repo functionality"
+            )
+            return
 
         if repo_diff_result:
             self.print_output(repo_diff_result, dry_run)
@@ -189,7 +195,7 @@ class TerraformRepoIntegration(
                     logging.error(
                         f"{err}\nUnable to parse existing state for repo: '{key}'"
                     )
-                    if self.params.ignore_state_errors:
+                    if self.params.refresh_state:
                         logging.info("Ignoring state load error")
 
         return repo_list
@@ -304,7 +310,7 @@ class TerraformRepoIntegration(
 
         # validate that only one repo is being modified in each MR
         # this lets us fail early and avoid multiple GL requests we don't need to make
-        if dry_run and len(merged) > 1 and not self.params.ignore_state_errors:
+        if dry_run and len(merged) > 1 and not self.params.refresh_state:
             raise Exception(
                 "Only one repository can be modified per merge request, please split your change out into multiple MRs. Hint: try rebasing your merge request"
             )

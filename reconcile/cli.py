@@ -1702,7 +1702,7 @@ def aws_version_sync(
     help="Specify where to place the output of the integration",
 )
 @click.option(
-    "--ignore-state-errors",
+    "--refresh-state",
     is_flag=True,
     help="Instructs terraform-repo to ignore state load errors and re-create repo states",
 )
@@ -1719,7 +1719,7 @@ def terraform_repo(
             terraform_repo.TerraformRepoIntegrationParams(
                 output_file=output_file,
                 validate_git=True,
-                ignore_state_errors=ignore_state_errors,
+                refresh_state=ignore_state_errors,
                 gitlab_project_id=gitlab_project_id,
                 gitlab_merge_request_id=gitlab_merge_request_id,
             )
