@@ -1710,7 +1710,7 @@ def aws_version_sync(
 @click.argument("gitlab-merge-request-id", required=False)
 @click.pass_context
 def terraform_repo(
-    ctx, output_file, ignore_state_errors, gitlab_project_id, gitlab_merge_request_id
+    ctx, output_file, refresh_state, gitlab_project_id, gitlab_merge_request_id
 ):
     from reconcile import terraform_repo
 
@@ -1719,7 +1719,7 @@ def terraform_repo(
             terraform_repo.TerraformRepoIntegrationParams(
                 output_file=output_file,
                 validate_git=True,
-                refresh_state=ignore_state_errors,
+                refresh_state=refresh_state,
                 gitlab_project_id=gitlab_project_id,
                 gitlab_merge_request_id=gitlab_merge_request_id,
             )
