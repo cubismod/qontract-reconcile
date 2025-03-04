@@ -11,10 +11,7 @@ query GcrRepos {
         mirror {
           url
           pullCredentials {
-            path
-            field
-            version
-            format
+            ...VaultSecret
           }
           tags
           tagsExclude

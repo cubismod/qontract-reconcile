@@ -17,16 +17,27 @@ from pydantic import (  # noqa: F401 # pylint: disable=W0611
     Json,
 )
 
+from reconcile.gql_definitions.fragments.vault_secret import VaultSecret
+
 
 DEFINITION = """
+fragment VaultSecret on VaultSecret_v1 {
+    path
+    field
+    version
+    format
+}
+
 query GcpProjects {
   projects: gcp_projects_v1 {
     name
     pushCredentials {
-      path
-      field
-      version
-      format
+      gcr {
+        ...VaultSecret
+      }
+      artifactRegistry {
+        ...VaultSecret
+      }
     }
   }
 }
@@ -39,16 +50,14 @@ class ConfiguredBaseModel(BaseModel):
         extra=Extra.forbid
 
 
-class VaultSecretV1(ConfiguredBaseModel):
-    path: str = Field(..., alias="path")
-    field: str = Field(..., alias="field")
-    version: Optional[int] = Field(..., alias="version")
-    q_format: Optional[str] = Field(..., alias="format")
+class GcpPushCredentialsV1(ConfiguredBaseModel):
+    gcr: Optional[VaultSecret] = Field(..., alias="gcr")
+    artifact_registry: Optional[VaultSecret] = Field(..., alias="artifactRegistry")
 
 
 class GcpProjectV1(ConfiguredBaseModel):
     name: str = Field(..., alias="name")
-    push_credentials: Optional[VaultSecretV1] = Field(..., alias="pushCredentials")
+    push_credentials: Optional[GcpPushCredentialsV1] = Field(..., alias="pushCredentials")
 
 
 class GcpProjectsQueryData(ConfiguredBaseModel):

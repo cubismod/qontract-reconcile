@@ -17,8 +17,17 @@ from pydantic import (  # noqa: F401 # pylint: disable=W0611
     Json,
 )
 
+from reconcile.gql_definitions.fragments.vault_secret import VaultSecret
+
 
 DEFINITION = """
+fragment VaultSecret on VaultSecret_v1 {
+    path
+    field
+    version
+    format
+}
+
 query GcrRepos {
   apps: apps_v1 {
     gcrRepos {
@@ -30,10 +39,7 @@ query GcrRepos {
         mirror {
           url
           pullCredentials {
-            path
-            field
-            version
-            format
+            ...VaultSecret
           }
           tags
           tagsExclude
@@ -59,16 +65,9 @@ class GcpProjectV1(ConfiguredBaseModel):
     name: str = Field(..., alias="name")
 
 
-class VaultSecretV1(ConfiguredBaseModel):
-    path: str = Field(..., alias="path")
-    field: str = Field(..., alias="field")
-    version: Optional[int] = Field(..., alias="version")
-    q_format: Optional[str] = Field(..., alias="format")
-
-
 class ContainerImageMirrorV1(ConfiguredBaseModel):
     url: str = Field(..., alias="url")
-    pull_credentials: Optional[VaultSecretV1] = Field(..., alias="pullCredentials")
+    pull_credentials: Optional[VaultSecret] = Field(..., alias="pullCredentials")
     tags: Optional[list[str]] = Field(..., alias="tags")
     tags_exclude: Optional[list[str]] = Field(..., alias="tagsExclude")
 

@@ -4,10 +4,12 @@ query GcpProjects {
   projects: gcp_projects_v1 {
     name
     pushCredentials {
-      path
-      field
-      version
-      format
+      gcr {
+        ...VaultSecret
+      }
+      artifactRegistry {
+        ...VaultSecret
+      }
     }
   }
 }
