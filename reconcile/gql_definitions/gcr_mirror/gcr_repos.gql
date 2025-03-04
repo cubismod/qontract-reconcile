@@ -1,0 +1,29 @@
+# qenerate: plugin=pydantic_v1
+
+query GcrRepos {
+  apps: apps_v1 {
+    gcrRepos {
+      project {
+        name
+      }
+      items {
+        name
+        mirror {
+          url
+          pullCredentials {
+            path
+            field
+            version
+            format
+          }
+          tags
+          tagsExclude
+        }
+        artifactRegistry {
+          enabled
+          location
+        }
+      }
+    }
+  }
+}
