@@ -7,7 +7,11 @@ class GitError(Exception):
 
 
 def clone(
-    repo_url: str, wd: str, depth: int | None = None, verify: bool | None = True
+    repo_url: str,
+    wd: str,
+    depth: int | None = None,
+    verify: bool | None = True,
+    blobless: bool | None = False,
 ) -> None:
     cmd = ["git"]
     if not verify:
@@ -15,6 +19,8 @@ def clone(
     cmd += ["clone"]
     if depth:
         cmd += ["--depth", str(depth)]
+    if blobless:
+        cmd += ["--filter=blob:none"]
     cmd += [repo_url, wd]
     result = subprocess.run(cmd, cwd=wd, capture_output=True, check=False)
     if result.returncode != 0:
@@ -80,6 +86,16 @@ def has_uncommited_changes() -> bool:
 
 def show_uncommited_changes() -> str:
     cmd = ["git", "diff"]
+    result = subprocess.run(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=True
+    )
+    return result.stdout.decode("utf-8")
+
+
+def diff_refs(ref1: str, ref2: str, path_filter: str | None) -> str:
+    cmd = ["git", "diff", ref1, ref2]
+    if path_filter:
+        cmd.extend(path_filter)
     result = subprocess.run(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=True
     )

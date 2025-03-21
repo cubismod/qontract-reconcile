@@ -1,5 +1,6 @@
 import logging
 from collections.abc import Callable
+from tempfile import TemporaryDirectory
 from typing import Any
 
 import yaml
@@ -22,6 +23,7 @@ from reconcile.utils.differ import (
     diff_iterables,
 )
 from reconcile.utils.exceptions import ParameterError
+from reconcile.utils.git import clone, diff_refs
 from reconcile.utils.gitlab_api import GitLabApi
 from reconcile.utils.runtime.integration import (
     PydanticRunParams,
@@ -211,27 +213,23 @@ class TerraformRepoIntegration(
 
         return repo_list
 
-    def check_ref(self, repo_url: str, ref: str) -> None:
+    def check_ref(self, repo_url: str, ref: str, gl: GitLabApi) -> None:
         """Validates that a Git SHA exists
 
         :param repo_url: full project URL including https/http
         :type repo_url: str
         :param ref: git SHA
         :type ref: str
+        :param gl: GitLab API
+        :type gl: GitlabApi
         :raises ParameterError: if the Git ref is invalid or project is not reachable
         """
-        instance = queries.get_gitlab_instance()
-        with GitLabApi(
-            instance,
-            settings=queries.get_secret_reader_settings(),
-            project_url=repo_url,
-        ) as gl:
-            try:
-                gl.get_commit_sha(ref=ref, repo_url=repo_url)
-            except (KeyError, AttributeError):
-                raise ParameterError(
-                    f'Invalid ref: "{ref}" on repo: "{repo_url}". Or the project repo is not reachable'
-                ) from None
+        try:
+            gl.get_commit_sha(ref=ref, repo_url=repo_url)
+        except (KeyError, AttributeError):
+            raise ParameterError(
+                f'Invalid ref: "{ref}" on repo: "{repo_url}". Or the project repo is not reachable'
+            ) from None
 
     def merge_results(
         self,
@@ -320,43 +318,58 @@ class TerraformRepoIntegration(
         :rtype: TerraformRepoV1
         """
         diff = diff_iterables(existing_state, desired_state, lambda x: x.name)
-
         merged = self.merge_results(diff)
 
-        # added repos: do standard validation that SHA is valid
-        if self.params.validate_git:
-            for add_repo in diff.add.values():
-                self.check_ref(add_repo.repository, add_repo.ref)
-        # removed repos: ensure that delete = true already
-        for delete_repo in diff.delete.values():
-            if not delete_repo.delete:
-                raise ParameterError(
-                    f'To delete the terraform repo "{delete_repo.name}", you must set delete: true in the repo definition'
-                )
-        # changed repos: prevent non deterministic terraform behavior by disabling updating key parameters
-        # also do SHA verification
-        for changes in diff.change.values():
-            c = changes.current
-            d = changes.desired
-            if c.account != d.account or c.name != d.name:
-                raise ParameterError(
-                    f'You cannot change the account or name after a repo has been created! Repo name: "{d.name}"'
-                )
+        instance = queries.get_gitlab_instance()
+        with GitLabApi(
+            instance,
+            project_id=self.params.gitlab_project_id,
+            settings=queries.get_secret_reader_settings(),
+        ) as gl:
+            # added repos: do standard validation that SHA is valid
             if self.params.validate_git:
-                self.check_ref(d.repository, d.ref)
-            if c.force_rerun_timestamp != d.force_rerun_timestamp:
-                logging.info("user has forced a re-run of tf-repo execution")
+                for add_repo in diff.add.values():
+                    self.check_ref(add_repo.repository, add_repo.ref, gl)
+            # removed repos: ensure that delete = true already
+            for delete_repo in diff.delete.values():
+                if not delete_repo.delete:
+                    raise ParameterError(
+                        f'To delete the terraform repo "{delete_repo.name}", you must set delete: true in the repo definition'
+                    )
+            # changed repos: prevent non deterministic terraform behavior by disabling updating key parameters
+            # also do SHA verification
+            for changes in diff.change.values():
+                c = changes.current
+                d = changes.desired
+                if c.account != d.account or c.name != d.name:
+                    raise ParameterError(
+                        f'You cannot change the account or name after a repo has been created! Repo name: "{d.name}"'
+                    )
+                if self.params.validate_git:
+                    self.check_ref(d.repository, d.ref, gl)
+                if c.force_rerun_timestamp != d.force_rerun_timestamp:
+                    logging.info("user has forced a re-run of tf-repo execution")
 
-        if len(merged) != 0:
-            if not dry_run and state:
-                self.update_state(diff, state)
-            self.update_mr_with_ref_diffs(diff)
-            return merged
+                if dry_run and (c.ref != d.ref):
+                    # gitlab diffs don't allow filtering by path meaning that diffing a large shared repo like infra produces
+                    # far too many results for a user to view
+                    with TemporaryDirectory() as td:
+                        clone(d.repository, td, verify=gl.ssl_verify, blobless=True)
+                        logging.info(
+                            f"Detailed diff for ${d.name}\n----\n${diff_refs(c.ref, d.ref, d.project_path)}\n----"
+                        )
+
+            if len(merged) != 0:
+                if not dry_run and state:
+                    self.update_state(diff, state)
+                self.update_mr_with_ref_diffs(diff, gl)
+                return merged
         return None
 
     def update_mr_with_ref_diffs(
         self,
         diff_result: DiffResult[TerraformRepoV1, TerraformRepoV1, str],
+        gl: GitLabApi,
     ) -> None:
         """Heavily "inspired" from the update_mr_with_ref_diffs function
         in saas change deploy tester.
@@ -365,31 +378,27 @@ class TerraformRepoIntegration(
 
         :param diff_result: diff between current and desired Terraform Repos
         :type diff_result: DiffResult[TerraformRepoV1, TerraformRepoV1, str]
+        :param gl: GitLab API
+        :type gl: GitlabApi
         """
         if self.params.gitlab_merge_request_id and self.params.gitlab_project_id:
-            instance = queries.get_gitlab_instance()
-            with GitLabApi(
-                instance,
-                project_id=self.params.gitlab_project_id,
-                settings=queries.get_secret_reader_settings(),
-            ) as gl:
-                mr = gl.get_merge_request(self.params.gitlab_merge_request_id)
+            mr = gl.get_merge_request(self.params.gitlab_merge_request_id)
 
-                # construct diff urls
-                diff_urls: list[str] = []
-                # gitlab specific syntax
-                diff_urls.extend(
-                    f"{pair.current.repository}/compare/{pair.current.ref}...{pair.desired.ref}"
-                    for pair in diff_result.change.values()
-                    if pair.current.ref != pair.desired.ref
+            # construct diff urls
+            diff_urls: list[str] = []
+            # gitlab specific syntax
+            diff_urls.extend(
+                f"{pair.current.repository}/compare/{pair.current.ref}...{pair.desired.ref}"
+                for pair in diff_result.change.values()
+                if pair.current.ref != pair.desired.ref
+            )
+            if len(diff_urls) > 0:
+                comment_body = (
+                    "tf-repo diffs (*more detailed git diffs available in PR output*):\n"
+                    + "\n".join([f"- {d}" for d in diff_urls])
                 )
-
-                if len(diff_urls) > 0:
-                    comment_body = "tf-repo diffs:\n" + "\n".join([
-                        f"- {d}" for d in diff_urls
-                    ])
-                    gl.delete_merge_request_comments(mr, startswith="tf-repo diffs:")
-                    gl.add_comment_to_merge_request(mr, comment_body)
+                gl.delete_merge_request_comments(mr, startswith="tf-repo diffs")
+                gl.add_comment_to_merge_request(mr, comment_body)
 
     def early_exit_desired_state(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         gqlapi = gql.get_api()
